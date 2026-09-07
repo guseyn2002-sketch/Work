@@ -1,0 +1,7 @@
+# generated / re-fetchable assets
+cinekit/assets/models/
+cinekit/assets/luts/
+__pycache__/
+*.pyc
+work/
+out/
