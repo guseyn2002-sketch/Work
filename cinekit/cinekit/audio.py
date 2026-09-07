@@ -262,10 +262,14 @@ def apply_board(x, chain):
 
 
 def sidechain(n, cuts, depth=0.45, attack=0.02, release=0.26):
-    """Duck envelope keyed to a list of times."""
+    """Duck envelope keyed to a list of times.
+
+    The eased recovery is applied to the interpolation, not to the finished
+    gain, so the floor really is `1 - depth`.
+    """
     duck = np.ones(n)
     L = int(release * SR)
-    ramp = np.linspace(1 - depth, 1.0, L) ** 0.7
+    ramp = 1.0 - depth * (1.0 - np.linspace(0.0, 1.0, L) ** 0.7)
     for c in cuts:
         i = int(c * SR)
         if 0 <= i < n:

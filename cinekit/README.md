@@ -111,6 +111,18 @@ Measured at 1080×1920 on four CPU cores:
 
 Track once and cache; the tracker is the only stage you never need to repeat.
 
+## Tests
+
+```bash
+python3 tests/test_cinekit.py     # 13 checks, no network, a few seconds
+```
+
+They are behavioural, not smoke: the compositor test asserts a back layer is
+actually hidden by the subject and visible beside them, the camera test
+asserts a mask lands on the same pixels as the picture it was cropped with,
+and the LUT test checks an identity LUT is a no-op. Two real defects came out
+of writing them.
+
 ## Limits worth knowing
 
 - The pose mask is inferred at 256×256, so its edge is soft at 1080p. It holds
