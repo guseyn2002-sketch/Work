@@ -5,7 +5,7 @@ Two registers are covered. Loud — chrome fills, thick keylines, per-word
 colour, elastic pops. Quiet — wide letterspacing, hairlines, slow fades, which
 is what the luxury houses actually do.
 """
-import os, json, math
+import os, re, json, math
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
@@ -25,11 +25,27 @@ def catalog():
     return _catalog
 
 
+def have(name):
+    return os.path.exists(name if os.path.isabs(name)
+                          else os.path.join(FONTS, name + ".ttf"))
+
+
 def font(name, size):
-    """Load by file stem (e.g. 'PlayfairDisplay900')."""
+    """Load by file stem (e.g. 'PlayfairDisplay900').
+
+    A missing weight is the easiest mistake to make against a font library, so
+    the error names the weights the family actually ships.
+    """
     k = (name, int(size))
     if k not in _fc:
         path = name if os.path.isabs(name) else os.path.join(FONTS, name + ".ttf")
+        if not os.path.exists(path):
+            stem = re.sub(r"\d+$", "", os.path.basename(name))
+            near = sorted(os.path.splitext(f)[0] for f in os.listdir(FONTS)
+                          if f.startswith(stem) and f.endswith(".ttf"))
+            raise FileNotFoundError(
+                f"font {name!r} not in {FONTS}"
+                + (f"; this family ships {near}" if near else ""))
         _fc[k] = ImageFont.truetype(path, int(size))
     return _fc[k]
 

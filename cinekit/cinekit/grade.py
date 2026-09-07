@@ -165,3 +165,63 @@ def bloom(arr, threshold=0.80, sigma=26, amount=0.16, tint=(1.0, 0.86, 0.74)):
     hi *= np.array(tint, np.float32)[None, None, :]
     out = 1 - (1 - a) * (1 - hi * amount)
     return np.clip(out * 255.0, 0, 255)
+
+
+# ------------------------------------------------------------- LUT in numpy
+_lut_cache = {}
+
+
+def load_cube(path):
+    """Read a .cube 3D LUT into an (N,N,N,3) array indexed [b, g, r]."""
+    hit = _lut_cache.get(path)
+    if hit is not None:
+        return hit
+    size, rows = None, []
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.upper().startswith("LUT_3D_SIZE"):
+                size = int(line.split()[-1]); continue
+            if line[0].isalpha() or line.startswith("TITLE"):
+                continue
+            parts = line.split()
+            if len(parts) == 3:
+                rows.append([float(v) for v in parts])
+    if size is None:
+        raise ValueError(f"{path}: no LUT_3D_SIZE")
+    arr = np.asarray(rows, np.float32).reshape(size, size, size, 3)
+    _lut_cache[path] = arr
+    return arr
+
+
+def apply_lut(arr, lut, strength=1.0):
+    """Trilinear 3D-LUT application to a float HxWx3 array in 0..255.
+
+    Done with map_coordinates rather than fancy indexing: the eight-corner
+    gather is correct but roughly twenty times slower, which matters when it
+    runs on every frame.
+    """
+    from scipy.ndimage import map_coordinates
+    if isinstance(lut, str):
+        lut = load_cube(lut)
+    n = lut.shape[0]
+    src = np.clip(arr, 0, 255) * ((n - 1) / 255.0)
+    # lut is indexed [b, g, r]
+    coords = np.stack([src[..., 2], src[..., 1], src[..., 0]], 0)
+    out = np.empty_like(arr, np.float32)
+    for c in range(3):
+        out[..., c] = map_coordinates(lut[..., c], coords, order=1,
+                                      mode="nearest", prefilter=False)
+    out *= 255.0
+    if strength < 0.999:
+        out = arr * (1 - strength) + out * strength
+    return out
+
+
+def look_path(look):
+    p = os.path.join(LUTS, f"{look}.cube")
+    if not os.path.exists(p):
+        build_lut(look, path=p)
+    return p

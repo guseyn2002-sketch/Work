@@ -33,29 +33,29 @@ class Camera:
         self._nr = _noise(seed + 36, 20000)
 
     # ------------------------------------------------------------------
-    def frame(self, shot_state, n, track=None, retime="flow"):
-        """Render one output frame from a Shot.state() dict."""
-        st = shot_state
+    def geometry(self, st, n, track=None):
+        """Resolve the camera transform for one frame.
+
+        Returned separately from the pixels so the identical transform can be
+        applied to a subject mask, which is what lets graphics sit *behind*
+        a person.
+        """
         z, cx, cy = st["zoom"], st["cx"], st["cy"]
         roll = st["roll"]
 
-        # auto-reframe: let the tracker drive the crop centre
         if track is not None and st.get("track"):
             tx, ty = track["at"](st["src_t"])
             aim = st["meta"].get("aim", (0.5, 0.42))
             hold = st["meta"].get("track_strength", 1.0)
-            cw, ch = 1.0 / z, 1.0 / z
-            want_x = tx - (aim[0] - 0.5) * cw
-            want_y = ty - (aim[1] - 0.5) * ch
-            cx = cx + (want_x - cx) * hold
-            cy = cy + (want_y - cy) * hold
+            cw = ch = 1.0 / z
+            cx += (tx - (aim[0] - 0.5) * cw - cx) * hold
+            cy += (ty - (aim[1] - 0.5) * ch - cy) * hold
 
         amp = st["shake"]
         roll += self._nr[n % len(self._nr)] * amp * 0.18
         dx = self._nx[n % len(self._nx)] * amp
         dy = self._ny[n % len(self._ny)] * amp
 
-        # enlarge the source rect so a roll never exposes a corner
         th = math.radians(abs(roll))
         if th > 1e-4:
             pad = max((self.W * math.cos(th) + self.H * math.sin(th)) / self.W,
@@ -66,35 +66,58 @@ class Camera:
 
         SW, SH = self.store.width, self.store.height
         cw, chh = SW / z * pad, SH / z * pad
-        need = self.W / (SW / z)
-
-        im = self.store.sample(st["src_t"], need, mode=retime)
-        sw, sh = im.size
-        k = sw / SW
-
         ppx = self.W / (SW / z)
         ccx = cx * SW + dx / ppx
         ccy = cy * SH + dy / ppx
         left = max(0.0, min(SW - cw, ccx - cw / 2))
         top = max(0.0, min(SH - chh, ccy - chh / 2))
-        box = (max(0.0, left * k), max(0.0, top * k),
-               min(float(sw), (left + cw) * k), min(float(sh), (top + chh) * k))
 
+        return dict(left=left, top=top, cw=cw, ch=chh, pad=pad, roll=roll,
+                    zoom=z, mirror=st["mirror"], need=self.W / (SW / z),
+                    src=(SW, SH))
+
+    def apply_geometry(self, im, geo, resample=None):
+        """Apply a resolved transform to any image laid out in source space."""
+        resample = resample or self.resample
+        sw, sh = im.size
+        k = sw / geo["src"][0]
+        box = (max(0.0, geo["left"] * k), max(0.0, geo["top"] * k),
+               min(float(sw), (geo["left"] + geo["cw"]) * k),
+               min(float(sh), (geo["top"] + geo["ch"]) * k))
+        pad = geo["pad"]
         ow, oh = int(round(self.W * pad)), int(round(self.H * pad))
-        out = im.resize((ow, oh), self.resample, box=box)
-
-        if st["mirror"]:
+        out = im.resize((ow, oh), resample, box=box)
+        if geo["mirror"]:
             out = out.transpose(Image.FLIP_LEFT_RIGHT)
-        if abs(roll) > 0.05:
-            out = out.rotate(roll, resample=self.resample, expand=False)
+        if abs(geo["roll"]) > 0.05:
+            out = out.rotate(geo["roll"], resample=resample, expand=False)
         if pad != 1.0:
             l, t = (ow - self.W) // 2, (oh - self.H) // 2
             out = out.crop((l, t, l + self.W, t + self.H))
+        if out.size != (self.W, self.H):
+            out = out.resize((self.W, self.H), resample)
+        return out
+
+    def frame(self, shot_state, n, track=None, retime="flow", geo=None):
+        """Render one output frame from a Shot.state() dict."""
+        st = shot_state
+        geo = geo or self.geometry(st, n, track)
+        im = self.store.sample(st["src_t"], geo["need"], mode=retime)
+        out = self.apply_geometry(im, geo)
         if st["blur"] > 0:
             out = directional_blur(out, st["blur"] * math.sin(math.pi * st["u"]) ** 0.7)
-        if out.size != (self.W, self.H):
-            out = out.resize((self.W, self.H), self.resample)
         return out
+
+    def mask_frame(self, mask, geo):
+        """Put a source-space subject mask into output space (float 0..1)."""
+        if mask is None:
+            return None
+        m = np.asarray(mask, np.float32)
+        im = Image.fromarray(np.clip(m * 255, 0, 255).astype(np.uint8))
+        if im.size != geo["src"]:
+            im = im.resize(geo["src"], Image.BILINEAR)
+        return np.asarray(self.apply_geometry(im, geo, Image.BILINEAR),
+                          np.float32)[..., None] / 255.0
 
 
 def directional_blur(im, strength, axis=1, steps=7):
